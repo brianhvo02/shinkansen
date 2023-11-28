@@ -1,0 +1,15 @@
+{
+    "name": "shinkansen",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.mjs && rm gtfs.zip && cd gtfs && zip ../gtfs.zip * && cd .."
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+      "lodash": "^4.17.21"
+    }
+}
