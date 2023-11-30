@@ -20,18 +20,9 @@ export const getTripInfo = async (req: Request, res: Response, next: NextFunctio
     const endShapeDist = stopTimes[stopTimes.length - 1].distanceTraveled;
     const shapes = await db.getTripShapes(tripId, startShapeDist, endShapeDist);
     const trip = await db.getTrip(tripId);
-    const geojson: GetTripInfoPayload['geojson'] = {
+    const geojsonStops: GetTripInfoPayload['geojsonStops'] = {
         type: 'FeatureCollection',
         features: [
-            {
-                type: 'Feature',
-                geometry: {
-                    type: 'LineString',
-                    coordinates: shapes.map(({ lon, lat }) => [lon, lat]),
-                },
-                properties: trip,
-                id: tripId
-            },
             ...stopTimes.map((stopTime): Feature<Point, StopTime> => ({
                 type: 'Feature',
                 geometry: {
@@ -43,5 +34,14 @@ export const getTripInfo = async (req: Request, res: Response, next: NextFunctio
             }))
         ]
     }
-    res.json({ stopTimesMap: _.keyBy(stopTimes, 'id'), geojson });
+    const geojsonLine: GetTripInfoPayload['geojsonLine'] = {
+        type: 'Feature',
+        geometry: {
+            type: 'LineString',
+            coordinates: shapes.map(({ lon, lat }) => [lon, lat]),
+        },
+        properties: trip,
+        id: tripId
+    }
+    res.json({ stopTimesMap: _.keyBy(stopTimes, 'id'), geojsonStops, geojsonLine });
 }

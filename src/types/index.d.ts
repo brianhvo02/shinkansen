@@ -1,4 +1,4 @@
-import { FeatureCollection, LineString, Point } from 'geojson';
+import { Feature, FeatureCollection, LineString, Point } from 'geojson';
 
 export interface Stop {
     id: string;
@@ -58,7 +58,8 @@ export interface Shape {
 
 export interface GetTripInfoPayload {
     stopTimesMap: Record<string, StopTime>;
-    geojson: FeatureCollection<LineString | Point, Trip | StopTime>;
+    geojsonStops: FeatureCollection<Point, StopTime>;
+    geojsonLine: Feature<LineString, Trip>;
 }
 
 interface TranslationsMap {

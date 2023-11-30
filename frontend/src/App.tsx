@@ -100,13 +100,11 @@ const App = () => {
     useEffect(() => {
         if (tripInfo && mapRef.current) {
             const bounds = new LngLatBounds();
-            tripInfo.geojson.features.forEach(({ geometry }) => {
-                if (geometry.type === 'Point') {
-                    bounds.extend({ 
-                        lon: geometry.coordinates[0], 
-                        lat: geometry.coordinates[1] 
-                    });
-                }
+            tripInfo.geojsonStops.features.forEach(({ geometry }) => {
+                bounds.extend({ 
+                    lon: geometry.coordinates[0], 
+                    lat: geometry.coordinates[1] 
+                });
             });
             mapRef.current.fitBounds(bounds, { padding: 50 });
         }
@@ -351,7 +349,7 @@ const App = () => {
                         tileSize={512}
                         maxzoom={14}
                     />
-                    <Source type='geojson' data={tripInfo?.geojson ?? stopsPayload.geojson}>
+                    <Source type='geojson' data={tripInfo?.geojsonStops ?? stopsPayload.geojson}>
                         <Layer
                             id='stops'
                             type='symbol'
@@ -367,15 +365,20 @@ const App = () => {
                                 'text-offset': [0, 0.75]
                             }}
                         />
-                        <Layer 
-                            id='routes' 
-                            type='line' 
-                            paint={{
-                                'line-width': 4,
-                                'line-color': '#4A89F3'
-                            }}
-                        />
                     </Source>
+                    {
+                        tripInfo &&
+                        <Source type='geojson' data={tripInfo.geojsonLine}>
+                            <Layer 
+                                id='routes' 
+                                type='line' 
+                                paint={{
+                                    'line-width': 4,
+                                    'line-color': '#4A89F3'
+                                }}
+                            />
+                        </Source>
+                    }
                     <NavigationControl />
                     {
                         selectedStop &&
