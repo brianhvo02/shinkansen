@@ -80,27 +80,6 @@
             }
         }
 
-        .selected-stop {
-            h2 {
-                font-size: 1.25rem;
-                line-height: 1.5rem;
-                text-align: center;
-            }
-
-            h2:first-child {
-                margin-top: 1rem;
-            }
-
-            h2:nth-child(2) {
-                margin-bottom: 0.75rem;
-            }
-
-            .selected-stop-buttons {
-                display: flex;
-                justify-content: space-around;
-            }
-        }
-
         .selected-trip {
             margin-top: 1rem;
             text-align: center;
@@ -126,6 +105,33 @@
 
     .map {
         flex-grow: 1;
+    }
+}
+
+.selected-stop {
+
+    .mapboxgl-popup-content > div {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    h2 {
+        font-size: 1.25rem;
+        line-height: 1.5rem;
+    }
+
+    h2:first-child {
+        margin-top: 1rem;
+    }
+
+    h2:nth-child(2) {
+        margin-bottom: 0.75rem;
+    }
+
+    .selected-stop-buttons {
+        display: flex;
+        justify-content: space-around;
     }
 }
 

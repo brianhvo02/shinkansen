@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import './App.scss';
 import { GetStopsPayload, GetTripInfoPayload, GetTripsByStopsPayload, Stop } from '../../src/types';
 import { QueryFunctionContext, useQuery } from 'react-query';
-import Map, { NavigationControl, MapRef, Source, Layer } from 'react-map-gl';
+import Map, { NavigationControl, MapRef, Source, Layer, Popup } from 'react-map-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import MapboxLanguage from '@mapbox/mapbox-gl-language';
 import { LngLatBounds, Style } from 'mapbox-gl';
 import { isStop } from './utils';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
-import { Button, Dialog, DialogTitle, FormControl, InputLabel, MenuItem, Pagination, Select } from '@mui/material';
+import { Button, ButtonGroup, Dialog, DialogTitle, FormControl, InputLabel, MenuItem, Pagination, Select } from '@mui/material';
 
 const getStops = async (): Promise<GetStopsPayload> => {
     const res = await fetch('/api/stops');
@@ -77,11 +77,13 @@ const App = () => {
     const { data: tripInfo } = useQuery(['tripInfo', trip, ...(selectedTrip?.stopSequences.split(',') ?? [])], getTripInfo);
     
     const [showStopList, setShowStopList] = useState(false);
-    const [stopList, setStopList] = useState<'start' | 'stop'>('start');
+    const [stopList, setStopList] = useState<'start' | 'end'>('start');
     const [stopListPage, setStopListPage] = useState(1);
 
     const [showTripList, setShowTripList] = useState(false);
     const [tripListPage, setTripListPage] = useState(1);
+
+    const popupRef = useRef<mapboxgl.Popup>(null);
 
     const tripsWithTimes = trips && Object.values(trips.tripsWithTimesMap);
 
@@ -114,10 +116,15 @@ const App = () => {
         setTrip('');
     }, [trips]);
 
+    useEffect(() => {
+        // if (selectedStop)
+            // popupRef.current?.to
+    }, [selectedStop])
+
     if (!stopsPayload) return null;
     const stops = Object.values(stopsPayload.stopsMap);
 
-    const handleSelectStop = (type: 'start' | 'stop') => () => {
+    const handleSelectStop = (type: 'start' | 'end') => () => {
         setStopList(type);
         setShowStopList(true);
     }
@@ -180,7 +187,7 @@ const App = () => {
                             )
                         }
                     </div>
-                    <div className='start-end-stop' onClick={handleSelectStop('stop')}>
+                    <div className='start-end-stop' onClick={handleSelectStop('end')}>
                         <h2>End Stop</h2>
                         {
                             endStop.length ? (
@@ -292,27 +299,6 @@ const App = () => {
                     )
                 }
                 {
-                    selectedStop &&
-                    <div className='selected-stop'>
-                        <h2>{selectedStop.name}</h2>
-                        <h2>{selectedStop.nameEn}</h2>
-                        <div className='selected-stop-buttons'>
-                            <Button 
-                                variant='contained'
-                                onClick={() => {
-                                    setStartStop(selectedStop.id);
-                                }}
-                            >Start here</Button>
-                            <Button 
-                                variant='contained'
-                                onClick={() => {
-                                    setEndStop(selectedStop.id);
-                                }}
-                            >End here</Button>
-                        </div>
-                    </div>
-                }
-                {
                     selectedTrip &&
                     <div className='selected-trip'>
                         <h2>{selectedTrip.shortName}</h2>
@@ -391,6 +377,34 @@ const App = () => {
                         />
                     </Source>
                     <NavigationControl />
+                    {
+                        selectedStop &&
+                        <Popup 
+                            key={selectedStop.id} 
+                            longitude={selectedStop.lon} 
+                            latitude={selectedStop.lat} 
+                            ref={popupRef}
+                            onClose={() => setSelectedStop(null)}
+                            className='selected-stop'
+                        >
+                            <h2>{selectedStop.name}</h2>
+                            <h2>{selectedStop.nameEn}</h2>
+                            <ButtonGroup variant="text">
+                                <Button 
+                                    onClick={() => {
+                                        setStartStop(selectedStop.id);
+                                        popupRef.current?.remove();
+                                    }}
+                                >Set start</Button>
+                                <Button 
+                                    onClick={() => {
+                                        setEndStop(selectedStop.id);
+                                        popupRef.current?.remove();
+                                    }}
+                                >Set end</Button>
+                            </ButtonGroup>
+                        </Popup>
+                    }
                 </Map>
             </div>
         </div>
