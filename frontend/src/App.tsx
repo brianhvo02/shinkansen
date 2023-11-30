@@ -125,15 +125,32 @@ const App = () => {
     return (
         <div className='app'>
             <div className='info-panel'>
-                <FormControlLabel 
-                    control={
-                        <Switch 
-                            checked={lang === 'ja'} 
-                            onChange={() => setLang(prev => prev === 'en' ? 'ja' : 'en')} 
-                        />
-                    } 
-                    label={lang === 'en' ? 'English' : '日本語'} 
-                />
+                <header>
+                    <FormControlLabel 
+                        control={
+                            <Switch 
+                                checked={lang === 'ja'} 
+                                onChange={() => setLang(prev => prev === 'en' ? 'ja' : 'en')} 
+                            />
+                        } 
+                        label={lang === 'en' ? 'English' : '日本語'} 
+                    />
+                    <Button 
+                        variant='text'
+                        onClick={() => {
+                            setStartStop('');
+                            setEndStop('');
+                            setTrip('');
+                            setSelectedStop(null);
+                            setStopListPage(1);
+                            setTripListPage(1);
+                        }}
+                    >Start over</Button>
+                </header>
+                <h1>
+                    <span>新幹線 - Shinkansen</span>
+                    <span>Trip Planner</span>
+                </h1>
                 <FormControl fullWidth>
                     <InputLabel>Service</InputLabel>
                     <Select
@@ -313,17 +330,17 @@ const App = () => {
                         <p>{selectedTrip.headsignEn}</p>
                     </div>
                 }
-                <Button 
-                    variant='text'
-                    onClick={() => {
-                        setStartStop('');
-                        setEndStop('');
-                        setTrip('');
-                        setSelectedStop(null);
-                        setStopListPage(1);
-                        setTripListPage(1);
-                    }}
-                >Start over</Button>
+                <footer>
+                    <p>Copyright &#169; 2023 Brian Vo</p>
+                    <div className='links'>
+                        <a href='https://brianhuyvo.com' target='_blank' rel="noreferrer">
+                            Website
+                        </a>
+                        <a href='https://github.com/brianhvo02' target='_blank' rel="noreferrer">
+                            GitHub
+                        </a>
+                    </div>
+                </footer>
             </div>
             <div className='map'>
                 <Map
