@@ -8,18 +8,132 @@
     .info-panel {
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 1rem;
         padding: 1rem;
 
-        .selected-stop {
-            margin-top: 1rem;
+        width: 20rem;
+
+        .start-end-stops {
             display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
+            justify-content: space-around;
+
+            .start-end-stop {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.5rem;
+                border-radius: 8px;
+                min-width: 7rem;
+                user-select: none;
+
+                transition: 0.3s;
+
+                svg {
+                    font-size: 2rem;
+                }
+            }
+
+            .start-end-stop:hover {
+                background-color: rgb(240, 240, 240);
+                cursor: pointer;
+            }
+        }
+
+        .selected-stop {
+            h2 {
+                font-size: 1.25rem;
+                line-height: 1.5rem;
+                text-align: center;
+            }
+
+            h2:first-child {
+                margin-top: 1rem;
+            }
+
+            h2:nth-child(2) {
+                margin-bottom: 0.75rem;
+            }
+
+            .selected-stop-buttons {
+                display: flex;
+                justify-content: space-around;
+            }
+        }
+
+        .selected-trip {
+            margin-top: 1rem;
+            text-align: center;
+
+            h2 {
+                font-size: 1.25rem;
+                line-height: 1.5rem;
+                font-weight: bold;
+            }
+
+            h3 {
+                font-size: 1.25rem;
+                line-height: 1.5rem;
+                margin-top: 1rem;
+            }
+
+            p {
+                font-size: 1rem;
+                line-height: 1.25rem;
+            }
         }
     }
 
     .map {
         flex-grow: 1;
+    }
+}
+
+.stop-list, .trip-list {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 1rem;
+
+    .stops, .trips {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        box-sizing: border-box;
+        margin-bottom: 1rem;
+        row-gap: 0.5rem;
+
+        li {
+            padding: 0.5rem;
+            text-align: center;
+            width: 9rem;
+
+            border-radius: 8px;
+            user-select: none;
+
+            transition: 0.3s;
+
+            h1 {
+                line-height: 1.5rem;
+                font-size: 1.25rem;
+                font-weight: bold;
+            }
+
+            h2 {
+                line-height: 1.25rem;
+                font-size: 1rem;
+                margin: 0.5rem 0;
+            }
+
+            p {
+                line-height: 1rem;
+                font-size: 0.75rem;
+            }
+        }
+
+        li:hover {
+            background-color: rgb(240, 240, 240);
+            cursor: pointer;
+        }
     }
 }

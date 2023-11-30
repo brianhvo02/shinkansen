@@ -2,22 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import './App.scss';
 import { GetStopsPayload, GetTripInfoPayload, GetTripsByStopsPayload, Stop } from '../../src/types';
 import { QueryFunctionContext, useQuery } from 'react-query';
-import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox/typed';
-import Map, { useControl, NavigationControl, MapRef } from 'react-map-gl';
-import { GeoJsonLayer } from '@deck.gl/layers/typed';
+import Map, { NavigationControl, MapRef, Source, Layer } from 'react-map-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { Feature, Point } from 'geojson';
-import type { PickingInfo } from '@deck.gl/core/typed';
 import MapboxLanguage from '@mapbox/mapbox-gl-language';
-import { Style } from 'mapbox-gl';
-
-function DeckGLOverlay(props: MapboxOverlayProps & {
-    interleaved?: boolean;
-}) {
-    const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay(props));
-    overlay.setProps(props);
-    return null;
-}
+import { LngLatBounds, Style } from 'mapbox-gl';
+import { isStop } from './utils';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Switch from '@mui/material/Switch';
+import { Button, Dialog, DialogTitle, FormControl, InputLabel, MenuItem, Pagination, Select } from '@mui/material';
 
 const getStops = async (): Promise<GetStopsPayload> => {
     const res = await fetch('/api/stops');
@@ -36,11 +28,11 @@ const getTripsByStops = async (
 }
 
 const getTripInfo = async (
-    { queryKey: [_, tripId, startStopSeq, endStopSeq] }: QueryFunctionContext<string[]>
+    { queryKey: [_, tripId, start, end] }: QueryFunctionContext<string[]>
 ): Promise<GetTripInfoPayload | null> => {
     if (!tripId.length)
         return null;
-    const params = new URLSearchParams({ startStopSeq, endStopSeq })
+    const params = new URLSearchParams({ start, end })
     const res = await fetch(`/api/trips/info/${tripId}?${params}`);
     if (!res.ok) throw new Error();
     return res.json();
@@ -56,8 +48,6 @@ const getElapsedTime = (a: number, b: number) => {
     ].join(':');
 }
 
-type StopFeature = Feature<Point, Stop>;
-
 const App = () => {
     const { data: stopsPayload } = useQuery('stops', getStops);
     const [lang, setLang] = useState('en');
@@ -68,10 +58,30 @@ const App = () => {
     const [trip, setTrip] = useState('');
     const mapRef = useRef<MapRef>(null);
     const [mapStyle, setMapStyle] = useState<Style>();
-    const [showStops, setShowStops] = useState(true);
-    const [selectedStop, setSelectedStop] = useState<Stop | null>(null);
+    const [selectedStop, setSelectedStop] = useState<Stop | null>();
+
     const selectedTrip = useMemo(() => trips?.tripsWithTimesMap[trip], [trips, trip]);
+    const { departTime, arriveTime, elapsedTime } = useMemo(() => {
+        const departTime = selectedTrip?.departureTimes.split(',')[0];
+        const arriveTime = selectedTrip?.arrivalTimes.split(',')[1];
+        const departTs = selectedTrip?.departureTimestamps.split(',')[0];
+        const arriveTs = selectedTrip?.arrivalTimestamps.split(',')[1];
+        const elapsedTime = departTs && arriveTs && getElapsedTime(
+            parseInt(departTs), 
+            parseInt(arriveTs)
+        );
+
+        return { departTime, arriveTime, elapsedTime };
+    }, [selectedTrip])
+
     const { data: tripInfo } = useQuery(['tripInfo', trip, ...(selectedTrip?.stopSequences.split(',') ?? [])], getTripInfo);
+    
+    const [showStopList, setShowStopList] = useState(false);
+    const [stopList, setStopList] = useState<'start' | 'stop'>('start');
+    const [stopListPage, setStopListPage] = useState(1);
+
+    const [showTripList, setShowTripList] = useState(false);
+    const [tripListPage, setTripListPage] = useState(1);
 
     const tripsWithTimes = trips && Object.values(trips.tripsWithTimesMap);
 
@@ -82,165 +92,238 @@ const App = () => {
     }, [lang]);
 
     useEffect(() => {
+        if (trip) setSelectedStop(null);
+    }, [trip]);
+
+    useEffect(() => {
+        if (tripInfo && mapRef.current) {
+            const bounds = new LngLatBounds();
+            tripInfo.geojson.features.forEach(({ geometry }) => {
+                if (geometry.type === 'Point') {
+                    bounds.extend({ 
+                        lon: geometry.coordinates[0], 
+                        lat: geometry.coordinates[1] 
+                    });
+                }
+            });
+            mapRef.current.fitBounds(bounds, { padding: 50 });
+        }
+    }, [tripInfo]);
+
+    useEffect(() => {
         setTrip('');
     }, [trips]);
 
-    useEffect(() => {
-        if (!tripInfo) return;
-        
-        setShowStops(false);
-
-    }, [tripInfo])
-
     if (!stopsPayload) return null;
-    const { stopsMap, geojson } = stopsPayload;
-    const stops = Object.values(stopsMap);
+    const stops = Object.values(stopsPayload.stopsMap);
 
-    const onClick = (pickingInfo: PickingInfo) =>
-        setSelectedStop(pickingInfo.object.properties);
-
-    const stopsLayer = new GeoJsonLayer({
-        id: 'stops-layer',
-        data: geojson,
-        pickable: true,
-        onClick,
-        pointType: 'circle+text',
-        stroked: false,
-        // @ts-ignore
-        getFillColor: (d: StopFeature) => d.id === selectedStop?.id ? [100, 100, 100] : [0, 0, 0],
-        getPointRadius: 8,
-        pointRadiusUnits: 'pixels',
-        updateTriggers: {
-            getText: lang,
-            getFillColor: selectedStop
-        },
-        textCharacterSet: 'auto',
-        getTextSize: 16,
-        getTextPixelOffset: [0, 20],
-        textFontFamily: 'Trebuchet MS',
-        visible: showStops,
-        getText: (d: StopFeature) => 
-            lang === 'en' 
-                ? d.properties.nameEn 
-                : d.properties.name
-    });
-
-    const tripLayer = new GeoJsonLayer({
-        id: 'trip-layer',
-        data: tripInfo?.geojson,
-        pickable: true,
-        // onClick,
-        pointType: 'circle+text',
-        stroked: false,
-        // @ts-ignore
-        // getFillColor: (d: StopFeature) => d.id === selectedStop?.id ? [100, 100, 100] : [0, 0, 0],
-        getPointRadius: 8,
-        pointRadiusUnits: 'pixels',
-        updateTriggers: {
-            getText: lang,
-            getFillColor: selectedStop
-        },
-        textCharacterSet: 'auto',
-        getTextSize: 16,
-        getTextPixelOffset: [0, 20],
-        textFontFamily: 'Trebuchet MS',
-        visible: !showStops,
-        getText: (d: StopFeature) => 
-            lang === 'en' 
-                ? d.properties.nameEn 
-                : d.properties.name
-    });
+    const handleSelectStop = (type: 'start' | 'stop') => () => {
+        setStopList(type);
+        setShowStopList(true);
+    }
 
     return (
-        <div className="app">
+        <div className='app'>
             <div className='info-panel'>
-                <select value={lang} onChange={e => setLang(e.target.value)}>
-                    <option value='en'>English</option>
-                    <option value='ja'>Japanese</option>
-                </select>
-                <select value={service} onChange={e => setService(e.target.value)}>
-                    <option value='weekday'>Weekdays</option>
-                    <option value='saturday'>Saturdays</option>
-                    <option value='holiday'>Sundays and Holidays</option>
-                </select>
-                <select value={startStop} onChange={e => setStartStop(e.target.value)}>
-                <option value='' disabled>Start Stop</option>
-                    {
-                        stops.map(stop => {
-                            return (
-                                <option key={`start_${stop.id}`} value={stop.id}>
-                                    {
-                                        lang === 'en' 
-                                            ? stop.nameEn 
-                                            : stop.name
-                                    }
-                                </option>
-                            );
-                        })
-                    }
-                </select>
-                <select value={endStop} onChange={e => setEndStop(e.target.value)}>
-                    <option value='' disabled>End Stop</option>
-                    {
-                        stops.map(stop => {
-                            return (
-                                <option key={`end_${stop.id}`} value={stop.id}>
-                                    {
-                                        lang === 'en' 
-                                            ? stop.nameEn 
-                                            : stop.name
-                                    }
-                                </option>
-                            );
-                        })
-                    }
-                </select>
-                {
-                    tripsWithTimes && !tripsWithTimes.length &&
-                    <p>No trips found!</p>
-                }
-                {
-                    tripsWithTimes && !!tripsWithTimes.length &&
-                    <select value={trip} onChange={e => setTrip(e.target.value)}>
-                        <option value='' disabled />
+                <FormControlLabel 
+                    control={
+                        <Switch 
+                            checked={lang === 'ja'} 
+                            onChange={() => setLang(prev => prev === 'en' ? 'ja' : 'en')} 
+                        />
+                    } 
+                    label={lang === 'en' ? 'English' : '日本語'} 
+                />
+                <FormControl fullWidth>
+                    <InputLabel>Service</InputLabel>
+                    <Select
+                        value={service}
+                        label='Service'
+                        onChange={e => setService(e.target.value)}
+                    >
+                        <MenuItem value='weekday'>Weekdays</MenuItem>
+                        <MenuItem value='saturday'>Saturdays</MenuItem>
+                        <MenuItem value='holiday'>Sundays and Holidays</MenuItem>
+                    </Select>
+                </FormControl>
+                <div className='start-end-stops'>
+                    <div className='start-end-stop' onClick={handleSelectStop('start')}>
+                        <h2>Start Stop</h2>
                         {
-                            tripsWithTimes.map(trip => {
+                            startStop.length ? (
+                                <>
+                                    <p>{stopsPayload.stopsMap[startStop].name}</p>
+                                    <p>{stopsPayload.stopsMap[startStop].nameEn}</p>
+                                </>
+                            ) : (
+                                <>
+                                    <p><br /></p>
+                                    <p>Select</p>
+                                </>
+                            )
+                        }
+                    </div>
+                    <div className='start-end-stop' onClick={handleSelectStop('stop')}>
+                        <h2>End Stop</h2>
+                        {
+                            endStop.length ? (
+                                <>
+                                    <p>{stopsPayload.stopsMap[endStop].name}</p>
+                                    <p>{stopsPayload.stopsMap[endStop].nameEn}</p>
+                                </>
+                            ) : (
+                                <>
+                                    <p><br /></p>
+                                    <p>Select</p>
+                                </>
+                            )
+                        }
+                    </div>
+                </div>
+                <Dialog 
+                    onClose={() => setShowStopList(false)} 
+                    open={showStopList}
+                >
+                    <div className='stop-list'>
+                        <DialogTitle>Select {stopList} stop</DialogTitle>
+                        <ul className='stops'>
+                        {
+                            stops.slice((stopListPage - 1) * 21, stopListPage * 21).map(stop => {
                                 return (
-                                    <option key={trip.id} value={trip.id}>
-                                    {
-                                        trip.departureTimes.split(',')[0]
-                                    } → {
-                                        trip.arrivalTimes.split(',')[1]
-                                    } ({getElapsedTime(
-                                        parseInt(trip.departureTimestamps.split(',')[0]), 
-                                        parseInt(trip.arrivalTimestamps.split(',')[1])
-                                    )} hours) [{
-                                        lang === 'en' 
-                                            ? trip.shortNameEn
-                                            : trip.shortName
-                                    }]
-                                    </option>
-                                )
+                                    <li 
+                                        key={stop.id}
+                                        onClick={() => {
+                                            (stopList === 'start'
+                                                ? setStartStop
+                                                : setEndStop
+                                            )(stop.id);
+                                            setShowStopList(false);
+                                        }}
+                                    >
+                                        <h2>{stop.name}</h2>
+                                        <h2>{stop.nameEn}</h2>
+                                    </li>
+                                );
                             })
                         }
-                    </select>
+                        </ul>
+                        <Pagination
+                            count={Math.ceil(stops.length / 21)}
+                            page={stopListPage} 
+                            onChange={(_, val) => setStopListPage(val)}
+                        />
+                    </div>
+                </Dialog>
+                {
+                    tripsWithTimes &&
+                    <Dialog 
+                        onClose={() => setShowTripList(false)} 
+                        open={showTripList}
+                    >
+                        <div className='trip-list'>
+                            <DialogTitle>Select train</DialogTitle>
+                            <ul className='trips'>
+                            {
+                                tripsWithTimes.slice((tripListPage - 1) * 12, tripListPage * 12)
+                                    .map(trip => {
+                                        const departTime = trip.departureTimes.split(',')[0];
+                                        const arriveTime = trip.arrivalTimes.split(',')[1];
+                                        const elapsedTime = getElapsedTime(
+                                            parseInt(trip.departureTimestamps.split(',')[0]), 
+                                            parseInt(trip.arrivalTimestamps.split(',')[1])
+                                        );
+
+                                        return (
+                                            <li 
+                                                key={trip.id}
+                                                onClick={() => {
+                                                    setTrip(trip.id);
+                                                    setShowTripList(false);
+                                                }}
+                                            >
+                                                <h1>{trip.shortName}</h1>
+                                                <h1>{trip.shortNameEn}</h1>
+                                                <h2>
+                                                {
+                                                    departTime.slice(0, departTime.lastIndexOf(':'))
+                                                } → {
+                                                    arriveTime.slice(0, arriveTime.lastIndexOf(':'))
+                                                }
+                                                </h2>
+                                                <p>{elapsedTime} hours</p>
+                                            </li>
+                                        );
+                                    })
+                            }
+                            </ul>
+                            <Pagination
+                                count={Math.ceil(tripsWithTimes.length / 12)}
+                                page={tripListPage} 
+                                onChange={(_, val) => setTripListPage(val)}
+                            />
+                        </div>
+                    </Dialog>
+                }
+                {
+                    tripsWithTimes && (
+                        tripsWithTimes.length ? (
+                            <Button 
+                                variant='contained' 
+                                onClick={() => setShowTripList(true)}
+                            >Select train</Button>
+                        ) : <p>No trips found!</p>
+                    )
                 }
                 {
                     selectedStop &&
                     <div className='selected-stop'>
-                        {
-                            lang === 'en' 
-                                ? selectedStop.nameEn
-                                : selectedStop.name
-                        }
-                        <button onClick={() => {
-                            setStartStop(selectedStop.id);
-                        }}>Start here</button>
-                        <button onClick={() => {
-                            setEndStop(selectedStop.id)
-                        }}>End here</button>
+                        <h2>{selectedStop.name}</h2>
+                        <h2>{selectedStop.nameEn}</h2>
+                        <div className='selected-stop-buttons'>
+                            <Button 
+                                variant='contained'
+                                onClick={() => {
+                                    setStartStop(selectedStop.id);
+                                }}
+                            >Start here</Button>
+                            <Button 
+                                variant='contained'
+                                onClick={() => {
+                                    setEndStop(selectedStop.id);
+                                }}
+                            >End here</Button>
+                        </div>
                     </div>
                 }
+                {
+                    selectedTrip &&
+                    <div className='selected-trip'>
+                        <h2>{selectedTrip.shortName}</h2>
+                        <h2>{selectedTrip.shortNameEn}</h2>
+                        <p>
+                        {
+                            departTime?.slice(0, departTime.lastIndexOf(':'))
+                        } → {
+                            arriveTime?.slice(0, arriveTime.lastIndexOf(':'))
+                        }
+                        </p>
+                        <p>{elapsedTime} hours</p>
+                        <h3>Last Stop</h3>
+                        <p>{selectedTrip.headsign}</p>
+                        <p>{selectedTrip.headsignEn}</p>
+                    </div>
+                }
+                <Button 
+                    variant='text'
+                    onClick={() => {
+                        setStartStop('');
+                        setEndStop('');
+                        setTrip('');
+                        setSelectedStop(null);
+                        setStopListPage(1);
+                        setTripListPage(1);
+                    }}
+                >Start over</Button>
             </div>
             <div className='map'>
                 <Map
@@ -248,10 +331,48 @@ const App = () => {
                         bounds: [128.316220, 29.508335, 147.753738, 46.261185]
                     }}
                     ref={mapRef}
-                    hash={true}
-                    mapStyle={mapStyle ?? 'mapbox://styles/mapbox/streets-v11'}
+                    hash
+                    reuseMaps
+                    mapStyle={mapStyle ?? 'mapbox://styles/mapbox/streets-v12'}
+                    terrain={{ source: 'mapbox-dem', exaggeration: 1.5 }}
+                    interactiveLayerIds={['stops']}
+                    onClick={
+                        e => isStop(e.features?.[0]?.properties) 
+                            && setSelectedStop(e.features?.[0]?.properties)
+                    }
                 >
-                    <DeckGLOverlay layers={[stopsLayer, tripLayer]} />
+                    <Source
+                        id='mapbox-dem'
+                        type='raster-dem'
+                        url='mapbox://mapbox.mapbox-terrain-dem-v1'
+                        tileSize={512}
+                        maxzoom={14}
+                    />
+                    <Source type='geojson' data={tripInfo?.geojson ?? stopsPayload.geojson}>
+                        <Layer
+                            id='stops'
+                            type='symbol'
+                            paint={{ 'text-color': '#000000' }}
+                            layout={{
+                                'icon-image': 'rail',
+                                'icon-size': 1.5,
+                                'text-field': {
+                                    type: 'identity',
+                                    property: lang === 'en' ? 'nameEn' : 'name'
+                                },
+                                'text-anchor': 'top',
+                                'text-offset': [0, 0.75]
+                            }}
+                        />
+                        <Layer 
+                            id='routes' 
+                            type='line' 
+                            paint={{
+                                'line-width': 4,
+                                'line-color': '#4A89F3'
+                            }}
+                        />
+                    </Source>
                     <NavigationControl />
                 </Map>
             </div>
