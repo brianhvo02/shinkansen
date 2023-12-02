@@ -1,56 +1,24 @@
 import sqlite3 from 'sqlite3';
-import { Shape, Stop, StopTime, TranslationsMap, Trip, TripWithTimes } from './types';
-import { Translations, TranslationsTableName } from 'gtfs-types';
+import { Shape, Stop, StopTime, Transfers, Trip, TripWithTimes } from './types';
 import _ from 'lodash';
-import { getTranslations, openDb } from 'gtfs';
 
 export default class TransitDatabase {
     db: sqlite3.Database;
-    mappedTranslations: TranslationsMap;
 
-    private constructor(db: sqlite3.Database, mappedTranslations: TranslationsMap) {
-        this.db = db;
-        this.mappedTranslations = mappedTranslations;
-    }
-
-    static async init(path: string) {
-        const db = new sqlite3.Database(path);
-        const translations = await new Promise<Translations[]>((resolve, reject) => 
-            db.all<Translations>('SELECT * FROM translations', (err, rows) => err ? reject(err) : resolve(rows))
-        );
-        const mappedTranslations = translations.reduce((mappedTranslations: TranslationsMap, { 
-            table_name, field_name, language, translation, record_id 
-        }) => {
-            if (!record_id)
-                return mappedTranslations;
-        
-            if (!mappedTranslations[table_name])
-                mappedTranslations[table_name] = {};
-        
-            if (!mappedTranslations[table_name][field_name])
-                mappedTranslations[table_name][field_name] = {};
-        
-            if (!mappedTranslations[table_name][field_name][record_id])
-                mappedTranslations[table_name][field_name][record_id] = {};
-        
-            mappedTranslations[table_name][field_name][record_id][language] = translation;
-        
-            return mappedTranslations;
-        }, {});
-
-        return new this(db, mappedTranslations);
+    constructor(path: string) {
+        this.db = new sqlite3.Database(path);
     }
 
     close = async () => new Promise<void>((resolve, reject) => 
         this.db.close(err => err ? reject(err) : resolve())
     );
 
-    async get<T>(sql: string): Promise<T>;
-    async get<T>(sql: string, params: (string | number)[]): Promise<T>;
-    async get<T>(sql: string, ...params: (string | number)[]): Promise<T>;
+    async get<T>(sql: string): Promise<T | undefined>;
+    async get<T>(sql: string, params: (string | number)[]): Promise<T | undefined>;
+    async get<T>(sql: string, ...params: (string | number)[]): Promise<T | undefined>;
     async get<T>(sql: string, ...params: (string | number | (string | number)[])[]) {
-        return new Promise<T>((resolve, reject) => 
-            this.db.get<T>(
+        return new Promise<T | undefined>((resolve, reject) => 
+            this.db.get<T | undefined>(
                 sql, 
                 Array.isArray(params[0]) 
                     ? params[0] 
@@ -87,7 +55,7 @@ export default class TransitDatabase {
             stop_lon AS lon, 
             translation AS nameEn
         FROM stops
-        LEFT JOIN translations ON stops.stop_id = translations.record_id
+        JOIN translations ON stops.stop_id = translations.record_id
         WHERE stop_id IN (
             SELECT DISTINCT stop_id
             FROM stop_times
@@ -95,74 +63,165 @@ export default class TransitDatabase {
         ORDER BY nameEn
     `);
 
-    async getTripsByStops(serviceId: string, startStopId: string, endStopId: string) {
-        const trips = await this.all<TripWithTimes>(`
+    getTripsByStops = async (serviceId: string, startStopId: string, endStopId: string) =>
+        this.all<TripWithTimes>(`
             SELECT 
                 trips.trip_id AS id, 
-                trips.route_id AS routeId, 
                 trips.service_id AS service, 
                 trips.trip_headsign AS headsign, 
                 trips.trip_short_name AS shortName, 
                 trips.direction_id AS direction,
-                stop_times.arrival_times AS arrivalTimes,
-                stop_times.arrival_timestamps AS arrivalTimestamps,
-                stop_times.departure_times AS departureTimes,
-                stop_times.departure_timestamps AS departureTimestamps,
-                stop_times.stop_sequences AS stopSequences
+                trip_short_name_translations.translation AS shortNameEn,
+                trip_headsign_translations.translation AS headsignEn,
+                routes.route_id AS routeId, 
+                routes.route_short_name AS routeName,
+                routes.route_color AS routeColor,
+                route_translations.translation AS routeNameEn,
+                agency.agency_id AS agencyId,
+                agency.agency_name AS agencyName,
+                agency.agency_url AS agencyUrl,
+                agency_name_translations.translation AS agencyNameEn,
+                agency_url_translations.translation AS agencyUrlEn,
+                to_trips.trip_id AS connectionId, 
+                to_routes.route_id AS connectionRouteId, 
+                to_routes.route_short_name AS connectionRouteName,
+                to_routes.route_color AS connectionRouteColor,
+                to_route_translations.translation AS connectionRouteNameEn,
+                to_agency.agency_id AS connectionAgencyId,
+                to_agency.agency_name AS connectionAgencyName,
+                to_agency.agency_url AS connectionAgencyUrl,
+                to_agency_name_translations.translation AS connectionAgencyNameEn,
+                to_agency_url_translations.translation AS connectionAgencyUrlEn,
+                first_leg_stop_times_a.departure_time AS departureTime,
+                first_leg_stop_times_a.departure_timestamp AS departureTimestamp,
+                first_leg_stop_times_a.stop_sequence AS firstStopSequence,
+                first_leg_stop_times_a.stop_id AS firstStopId,
+                CASE
+                    WHEN first_leg_stop_times_b.stop_id = (?)
+                        THEN first_leg_stop_times_b.arrival_time
+                    WHEN last_leg_stop_times.stop_id = (?)
+                        THEN last_leg_stop_times.arrival_time
+                END AS arrivalTime,
+                CASE
+                    WHEN first_leg_stop_times_b.stop_id = (?)
+                        THEN first_leg_stop_times_b.arrival_timestamp
+                    WHEN last_leg_stop_times.stop_id = (?)
+                        THEN last_leg_stop_times.arrival_timestamp
+                END AS arrivalTimestamp,
+                CASE
+                    WHEN first_leg_stop_times_b.stop_id = (?)
+                        THEN first_leg_stop_times_b.stop_sequence
+                    WHEN last_leg_stop_times.stop_id = (?)
+                        THEN last_leg_stop_times.stop_sequence
+                END AS lastStopSequence,
+                CASE
+                    WHEN first_leg_stop_times_b.stop_id = (?)
+                        THEN first_leg_stop_times_b.stop_id
+                    WHEN last_leg_stop_times.stop_id = (?)
+                        THEN last_leg_stop_times.stop_id
+                END AS lastStopId
             FROM trips 
-            JOIN (
-                SELECT trip_id, 
-                    GROUP_CONCAT(arrival_time) AS arrival_times, 
-                    GROUP_CONCAT(arrival_timestamp) AS arrival_timestamps, 
-                    GROUP_CONCAT(departure_time) AS departure_times, 
-                    GROUP_CONCAT(departure_timestamp) AS departure_timestamps,
-                    GROUP_CONCAT(stop_id) AS stop_ids,
-                    GROUP_CONCAT(stop_sequence) AS stop_sequences
-                FROM (
-                    SELECT *
-                    FROM stop_times
-                    ORDER BY departure_time
-                ) 
-                WHERE trip_id IN (
-                    SELECT DISTINCT trip_id 
-                    FROM stop_times 
-                    WHERE stop_id = (?)
-                ) AND trip_id IN (
-                    SELECT DISTINCT trip_id 
-                    FROM stop_times 
-                    WHERE stop_id = (?)
-                ) AND (
-                    stop_id = (?)
-                        OR
-                    stop_id = (?)
+            JOIN translations AS trip_short_name_translations
+                ON trip_short_name_translations.table_name = 'trips'
+                    AND trip_short_name_translations.field_name = 'trip_short_name'
+                    AND trips.trip_id = trip_short_name_translations.record_id
+            JOIN translations AS trip_headsign_translations
+                ON trip_headsign_translations.table_name = 'trips'
+                    AND trip_headsign_translations.field_name = 'trip_headsign'
+                    AND trips.trip_id = trip_headsign_translations.record_id
+            JOIN routes ON trips.route_id = routes.route_id
+            JOIN translations AS route_translations
+                ON route_translations.table_name = 'routes'
+                    AND route_translations.field_name = 'route_short_name'
+                    AND routes.route_id = route_translations.record_id
+            JOIN agency ON routes.agency_id = agency.agency_id
+            JOIN translations AS agency_name_translations
+                ON agency_name_translations.table_name = 'agency'
+                    AND agency_name_translations.field_name = 'agency_name'
+                    AND agency.agency_id = agency_name_translations.record_id
+            JOIN translations AS agency_url_translations
+                ON agency_url_translations.table_name = 'agency'
+                    AND agency_url_translations.field_name = 'agency_url'
+                    AND agency.agency_id = agency_url_translations.record_id
+            LEFT JOIN transfers 
+                ON trips.trip_id = transfers.from_trip_id 
+            LEFT JOIN trips AS to_trips 
+                ON to_trips.trip_id = transfers.to_trip_id
+            LEFT JOIN routes AS to_routes ON to_trips.route_id = to_routes.route_id
+            LEFT JOIN translations AS to_route_translations
+                ON to_route_translations.table_name = 'routes'
+                    AND to_route_translations.field_name = 'route_short_name'
+                    AND to_routes.route_id = to_route_translations.record_id
+            LEFT JOIN agency AS to_agency ON to_routes.agency_id = to_agency.agency_id
+            LEFT JOIN translations AS to_agency_name_translations
+                ON to_agency_name_translations.table_name = 'agency'
+                    AND to_agency_name_translations.field_name = 'agency_name'
+                    AND to_agency.agency_id = to_agency_name_translations.record_id
+            LEFT JOIN translations AS to_agency_url_translations
+                ON to_agency_url_translations.table_name = 'agency'
+                    AND to_agency_url_translations.field_name = 'agency_url'
+                    AND agency.agency_id = to_agency_url_translations.record_id
+            JOIN stop_times AS first_leg_stop_times_a
+                ON trips.trip_id = first_leg_stop_times_a.trip_id
+            JOIN stop_times AS first_leg_stop_times_b
+                ON trips.trip_id = first_leg_stop_times_b.trip_id
+            LEFT JOIN stop_times AS last_leg_stop_times
+                ON to_trips.trip_id = last_leg_stop_times.trip_id
+            WHERE trips.service_id = (?)
+                AND first_leg_stop_times_a.stop_id = (?)
+                AND (
+                    (
+                        first_leg_stop_times_b.stop_id = (?)
+                            AND 
+                        first_leg_stop_times_a.stop_sequence < first_leg_stop_times_b.stop_sequence
+                    ) OR (
+                        last_leg_stop_times.stop_id = (?)
+                            AND
+                        first_leg_stop_times_a.stop_sequence < last_leg_stop_times.stop_sequence
+                    )
                 )
-                GROUP BY trip_id
-                HAVING stop_ids = (?)
-            ) AS stop_times ON stop_times.trip_id = trips.trip_id
-            WHERE service_id = (?)
-            ORDER BY departure_timestamps;
-        `, startStopId, endStopId, startStopId, endStopId, [startStopId, endStopId].join(','), serviceId);
-
-        trips.forEach(trip => {
-            trip.headsignEn = db.mappedTranslations.trips.trip_headsign[trip.id].en;
-            trip.shortNameEn = db.mappedTranslations.trips.trip_short_name[trip.id].en;
-            return trip;
-        });
-
-        return trips;
-    }
+            GROUP BY trips.trip_id
+            ORDER BY MIN(first_leg_stop_times_a.departure_timestamp);
+        `, ...Array(8).fill(endStopId), serviceId, startStopId, endStopId, endStopId);
 
     getTrip = async (tripId: string) =>
         this.get<Trip>(`
             SELECT 
-                trip_id AS id, 
-                route_id AS routeId, 
-                service_id AS service, 
-                trip_headsign AS headsign, 
-                trip_short_name AS shortName, 
-                direction_id AS direction
+                trips.trip_id AS id, 
+                trips.service_id AS service, 
+                trips.trip_headsign AS headsign, 
+                trips.trip_short_name AS shortName, 
+                trips.direction_id AS direction,
+                trip_short_name_translations.translation AS shortNameEn,
+                trip_headsign_translations.translation AS headsignEn,
+                routes.route_id AS routeId, 
+                routes.route_short_name AS routeName,
+                routes.route_color AS routeColor,
+                route_translations.translation AS routeNameEn,
+                agency.agency_id AS agencyId,
+                agency.agency_name AS agencyName,
+                agency.agency_url AS agencyUrl,
+                agency_translations.translation AS agencyNameEn
             FROM trips
-            WHERE trip_id = (?)
+            JOIN translations AS trip_short_name_translations
+                ON trip_short_name_translations.table_name = 'trips'
+                    AND trip_short_name_translations.field_name = 'trip_short_name'
+                    AND trips.trip_id = trip_short_name_translations.record_id
+            JOIN translations AS trip_headsign_translations
+                ON trip_headsign_translations.table_name = 'trips'
+                    AND trip_headsign_translations.field_name = 'trip_headsign'
+                    AND trips.trip_id = trip_headsign_translations.record_id
+            JOIN routes ON trips.route_id = routes.route_id
+            JOIN translations AS route_translations
+                ON route_translations.table_name = 'routes'
+                    AND route_translations.field_name = 'route_short_name'
+                    AND routes.route_id = route_translations.record_id
+            JOIN agency ON routes.agency_id = agency.agency_id
+            JOIN translations AS agency_translations
+                ON agency_translations.table_name = 'agency'
+                    AND agency_translations.field_name = 'agency_name'
+                    AND agency.agency_id = agency_translations.record_id
+            WHERE trips.trip_id = (?)
         `, tripId);
 
     getTripStopTimes = async (
@@ -185,11 +244,17 @@ export default class TransitDatabase {
         FROM stop_times
         JOIN stops ON stop_times.stop_id = stops.stop_id
         JOIN translations ON translations.record_id = stop_times.stop_id
-        WHERE trip_id = (?)
-            AND stop_sequence >= (?)
+        WHERE (
+            stop_times.trip_id = (?)
+                OR stop_times.trip_id IN (
+                    SELECT to_trip_id
+                    FROM transfers
+                    WHERE from_trip_id = (?)
+                )
+        ) AND stop_sequence >= (?)
             AND stop_sequence <= (?)
         ORDER BY stop_sequence
-    `, tripId, startStopSeq, endStopSeq);
+    `, tripId, tripId, startStopSeq, endStopSeq);
 
     getTripShapes = async (
         tripId: string, 
@@ -201,11 +266,19 @@ export default class TransitDatabase {
             shape_pt_lon AS lon,
             shape_pt_sequence AS seq
         FROM shapes 
-        WHERE shape_id = (?)
-            AND shape_dist_traveled >= (?)
-            AND shape_dist_traveled <= (?)
-        ORDER BY shape_pt_sequence
+        WHERE (
+            shape_id = (?)
+                AND shape_dist_traveled >= (?)
+                AND shape_dist_traveled <= (?)
+        )
+        ORDER BY shape_pt_sequence;
     `, tripId + '_shp', startShapeDist, endShapeDist);
+
+    getTripTransfer = async (tripId: string) =>
+        this.get<Transfers>(
+            'SELECT * FROM transfers WHERE from_trip_id = (?)',
+            tripId
+        );
 }
 
-export const db = await TransitDatabase.init('./gtfs.db');
+export const db = new TransitDatabase('./gtfs.db');

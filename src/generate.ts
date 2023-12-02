@@ -2,12 +2,14 @@
 import { load } from 'cheerio';
 import _ from 'lodash';
 import { mkdir, rm, writeFile } from 'fs/promises';
-import { dictionary } from './dictionary.js';
+import { RouteId, TransferType, dictionary, transferMap } from './dictionary.js';
 import { agency, calendar, feed_info, routes, translations } from './info.js';
-import { TranslationsTableName, type Shapes, type Stop, type StopTime, type Trip } from 'gtfs-types';
-import { FeatureCollection, LineString, Position } from 'geojson';
+import type { Shapes, Stop, StopTime, Trip } from 'gtfs-types';
+import { TranslationsTableName } from 'gtfs-types';
+import type { Feature, FeatureCollection, LineString, Position } from 'geojson';
 import { importGtfs } from 'gtfs';
 import { haversineDistance } from './utils.js';
+import type { Transfers } from './types';
 
 const segments: Record<string, Position[][]> = Object.fromEntries(
     await Promise.all(
@@ -40,6 +42,7 @@ const stops: Record<string, Stop> = {};
 const stop_times: StopTime[] = [];
 const allTrains: [string, 0 | 1, string][] = [];
 const shapes: Shapes[] = [];
+const transfers: Transfers[] = [];
 
 const getTimes = ($: cheerio.Root, service_id: string) => [
     $(`#${service_id}-0`).get(0),
@@ -152,9 +155,9 @@ const stopIds = await Promise.all(
     })
 ).then(arr => Object.fromEntries(arr));
 
-const findStopIdx = (routeId: string, stopId: string) => {
+const findStopIdx = (routeId: string, stopId: string): [RouteId, number] => {
     const idx = stopIds[routeId][stopId];
-    if (idx !== undefined) return [routeId, idx];
+    if (idx !== undefined) return [routeId as RouteId, idx];
 
     let otherStops;
 
@@ -186,49 +189,102 @@ const findStopIdx = (routeId: string, stopId: string) => {
 
     for (const [route, stopsMap] of Object.entries(otherStops)) {
         if (stopsMap[stopId] !== undefined) 
-            return [route, stopsMap[stopId]];
+            return [route as RouteId, stopsMap[stopId]];
     }
-    
-    return [];
+
+    return ['', -1];
 }
 
-// null; // 
-const DEBUG = null; // '/diagram/stops/00000110/80600004/?node=00006668&year=2023&month=11&day=30&from=timetable';
+//
+const DEBUG =  null; // '/diagram/stops/00000928/02b3003a/?node=00003492&year=2023&month=12&day=01&from=timetable';
 
-// for (const chunk of _.chunk(allTrains, 3)) {
-//     await Promise.all(chunk.map(async ([service_id, direction_id, url]) => {
-    for (const [service_id, direction_id, url] of allTrains) {
-        if (DEBUG && url !== DEBUG) continue;
+for (const [service_id, direction_id, url] of allTrains) {
+    if (DEBUG && url !== DEBUG) continue;
 
-        const page = await fetch(`https://www.navitime.co.jp${url}`)
-            .then(res => res.text());
-        const $ = load(page);
+    const page = await fetch(`https://www.navitime.co.jp${url}`)
+        .then(res => res.text());
+    const $ = load(page);
 
-        const routeId = url.split('/')[3];
-        const route_id = routeId === '00000928' 
-            ? '00000182' 
-            : routeId === '00001229'
-                ? '00000177'
-                : url.split('/')[3];
-        const trip_id = `${url.split('/')[4]}_${service_id}`;
+    const routeId = url.split('/')[3] === '00000928' 
+        ? '00000182' 
+        : url.split('/')[3] === '00001229'
+            ? '00000177'
+            : url.split('/')[3];
+
+    const firstStopId = $('.stops').first().find('.station-name-link').attr('href')?.split('=')[1] ?? '';
+    const lastStopId = $('.stops').last().find('.station-name-link').attr('href')?.split('=')[1] ?? '';
+    const [startRoute, firstStopIdx] = findStopIdx(routeId, firstStopId);
+    const [endRoute, lastStopIdx] = findStopIdx(routeId, lastStopId);
+
+    if (startRoute !== endRoute) {
+        transfers.push({
+            from_route_id: startRoute,
+            to_route_id: endRoute,
+            from_trip_id:  `${url.split('/')[4]}_${service_id}_${startRoute}`,
+            to_trip_id:  `${url.split('/')[4]}_${service_id}_${endRoute}`,
+            transfer_type: TransferType.IN_SEAT
+        })
+    }
+    
+    const startSegments = (startRoute === endRoute 
+        ? [...segments[startRoute]]
+            .slice(Math.min(firstStopIdx, lastStopIdx), Math.max(firstStopIdx, lastStopIdx))
+        : [...segments[startRoute]]
+            .slice(
+                ...(startRoute === '00000185' && endRoute === '00000122'
+                    ? [firstStopIdx, 8]
+                    : startRoute === '00000185' && endRoute === '00000182'
+                        ? [firstStopIdx, 17]
+                        : direction_id 
+                            ? [firstStopIdx] 
+                            : [0, firstStopIdx]
+                )
+            )
+    ).flat();
+
+    const endSegments = (startRoute === endRoute 
+        ? []
+        : [...segments[endRoute]]
+            .slice(
+                ...(startRoute === '00000122' && endRoute === '00000185'
+                    ? [lastStopIdx, 8]
+                    : startRoute === '00000182' && endRoute === '00000185'
+                        ? [lastStopIdx, 17]
+                        : direction_id 
+                            ? [0, lastStopIdx] 
+                            : [lastStopIdx]
+                )
+            )
+    ).flat();
+
+    if (!direction_id) {
+        startSegments.reverse();
+        endSegments.reverse();
+    }
+
+    const tripSegments = [startSegments, endSegments].map((seg, i) => {
+        if (!seg.length)
+            return [];
+
+        const trip_id = `${url.split('/')[4]}_${service_id}_${i ? endRoute : startRoute}`;
 
         const trip_headsign = $('.station-name-link').last().text();
         const trip_short_name = $('.head-txt').text();
-
+    
         const shape_id = `${trip_id}_shp`;
-
+    
         console.log(service_id.padEnd(8, ' '), trip_short_name);
-
+    
         trips.push({
             trip_id,
-            route_id,
+            route_id: i ? endRoute : startRoute,
             service_id,
             trip_headsign,
             trip_short_name,
             direction_id,
             shape_id
-        })
-
+        });
+    
         translations.push({
             table_name: TranslationsTableName.TRIPS,
             field_name: 'trip_headsign',
@@ -236,10 +292,7 @@ const DEBUG = null; // '/diagram/stops/00000110/80600004/?node=00006668&year=202
             translation: dictionary[trip_headsign],
             record_id: trip_id
         });
-
-        if (!trip_short_name.match(/\d/))
-            console.log(url);
-
+    
         translations.push({
             table_name: TranslationsTableName.TRIPS,
             field_name: 'trip_short_name',
@@ -251,51 +304,8 @@ const DEBUG = null; // '/diagram/stops/00000110/80600004/?node=00006668&year=202
             }`,
             record_id: trip_id
         });
-        
-        const firstStopId = $('.stops').first().find('.station-name-link').attr('href')?.split('=')[1] ?? '';
-        const lastStopId = $('.stops').last().find('.station-name-link').attr('href')?.split('=')[1] ?? '';
-        const [startRoute, firstStopIdx] = findStopIdx(route_id, firstStopId);
-        const [endRoute, lastStopIdx] = findStopIdx(route_id, lastStopId);
-
-        const startSegments = (startRoute === endRoute 
-            ? [...segments[startRoute]]
-                .slice(Math.min(firstStopIdx, lastStopIdx), Math.max(firstStopIdx, lastStopIdx))
-            : [...segments[startRoute]]
-                .slice(
-                    ...(startRoute === '00000185' && endRoute === '00000122'
-                        ? [firstStopIdx, 8]
-                        : startRoute === '00000185' && endRoute === '00000182'
-                            ? [firstStopIdx, 17]
-                            : direction_id 
-                                ? [firstStopIdx] 
-                                : [0, firstStopIdx]
-                    )
-                )
-        ).flat();
-
-        const endSegments = (startRoute === endRoute 
-            ? []
-            : [...segments[endRoute]]
-                .slice(
-                    ...(startRoute === '00000122' && endRoute === '00000185'
-                        ? [lastStopIdx, 8]
-                        : startRoute === '00000182' && endRoute === '00000185'
-                            ? [lastStopIdx, 17]
-                            : direction_id 
-                                ? [0, lastStopIdx] 
-                                : [lastStopIdx]
-                    )
-                )
-        ).flat();
-
-        if (!direction_id) {
-            startSegments.reverse();
-            endSegments.reverse();
-        }
-        
-        const tripSegments = startSegments.concat(endSegments);
-
-        const tripShape = tripSegments
+    
+        const tripShape = seg
             .reduce((shapes: Shapes[], segment, i) => {
                 const prevShape = shapes[i - 1];
                 const shape_dist_traveled = i > 0 && prevShape.shape_dist_traveled !== undefined
@@ -315,56 +325,83 @@ const DEBUG = null; // '/diagram/stops/00000110/80600004/?node=00006668&year=202
             
         shapes.push(...tripShape);
 
-        const tripStopTimes = $('.stops').toArray().reduce((arr: StopTime[], el, i) => {
-            const time = $(el).find('.time').text();
-            const fromToTime = $(el).find('.from-to-time').text();
-            const stop_id = $(el).find('.station-name-link').attr('href')?.split('=')[1];
-            if (!stop_id) return arr;
+        return tripShape;
+    });
 
-            const stop = stops[stop_id];
-            const [shapeIdx] = tripShape.reduce(([idx, dist]: number[], shape, i) => {
-                const shapeDist = haversineDistance([stop.stop_lon ?? 0, stop.stop_lat ?? 0], [shape.shape_pt_lon, shape.shape_pt_lat]);
-                return shapeDist < dist
-                    ? [i, shapeDist]
-                    : [idx, dist];
-            }, [-1, Infinity]);
+    let isEndSegment = false;
 
-            return arr.concat({
-                trip_id,
-                arrival_time: (time.length ? time.slice(0, -1) : fromToTime.slice(0, 5)) + ':00',
-                departure_time: (time.length ? time.slice(0, -1) : fromToTime.slice(6, 11)) + ':00',
-                stop_id,
-                stop_sequence: i,
-                timepoint: 1,
-                shape_dist_traveled: tripShape[shapeIdx].shape_dist_traveled
-            });
-        }, []);
+    const tripStopTimes = $('.stops').toArray().reduce((arr: StopTime[], el, i) => {
+        const time = $(el).find('.time').text();
+        const fromToTime = $(el).find('.from-to-time').text();
+        const stop_id = $(el).find('.station-name-link').attr('href')?.split('=')[1];
+        if (!stop_id) return arr;
+        if (startRoute !== endRoute && i > 0 && transferMap[endRoute].includes(stop_id)) {
+            isEndSegment = true;
+        }
 
-        stop_times.push(...tripStopTimes);
+        const stop = stops[stop_id];
+        const [shapeIdx] = tripSegments[Number(isEndSegment)].reduce(([idx, dist]: number[], shape, j) => {
+            const shapeDist = haversineDistance([stop.stop_lon ?? 0, stop.stop_lat ?? 0], [shape.shape_pt_lon, shape.shape_pt_lat]);
+            return shapeDist < dist
+                ? [j, shapeDist]
+                : [idx, dist];
+        }, [-1, Infinity]);
 
-        // if (DEBUG)
-        //     break;
-    }
-//     }));
-// }
+        return arr.concat({
+            trip_id: `${url.split('/')[4]}_${service_id}_${isEndSegment ? endRoute : startRoute}`,
+            arrival_time: (time.length ? time.slice(0, -1) : fromToTime.slice(0, 5)) + ':00',
+            departure_time: (time.length ? time.slice(0, -1) : fromToTime.slice(6, 11)) + ':00',
+            stop_id,
+            stop_sequence: i,
+            timepoint: 1,
+            shape_dist_traveled: tripSegments[Number(isEndSegment)][shapeIdx].shape_dist_traveled
+        });
+    }, []);
+
+    stop_times.push(...tripStopTimes);
+
+    if (DEBUG)
+        break;
+}
 
 if (DEBUG) {
-    const collection = {
-        type: 'FeatureCollection',
-        features: [
-            {
-                type: 'Feature',
-                geometry: {
-                    type: 'LineString',
-                    coordinates: shapes.map(shapePt => [
+    const features: Feature<LineString>[] = trips.map(trip => {
+        return {
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: shapes
+                    .filter(shape => shape.shape_id === trip.shape_id)
+                    .map(shapePt => [
                         shapePt.shape_pt_lon, 
                         shapePt.shape_pt_lat
                     ])
-                },
-                properties: trips[0],
-                id: 0
-            }
-        ]
+            },
+            properties: trip,
+            id: trip.trip_id
+        }
+    });
+
+    if (features.length === 2) {
+        const transferCoordinatesA = features[0].geometry.coordinates;
+        const transferCoordinatesB = features[1].geometry.coordinates;
+        features.push({
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [
+                    transferCoordinatesA[transferCoordinatesA.length - 1],
+                    transferCoordinatesB[0]
+                ]
+            },
+            properties: {},
+            id: 'transfer'
+        });
+    }
+
+    const collection = {
+        type: 'FeatureCollection',
+        features
     };
     
     await writeFile('output.geojson', JSON.stringify(collection))
@@ -379,7 +416,9 @@ if (DEBUG) {
     }
     
     Object.entries({
-        agency, routes, calendar, trips, stop_times, stops: Object.values(stops), shapes, translations, feed_info
+        agency, routes, calendar, trips, 
+        stop_times, stops: Object.values(stops), 
+        shapes, transfers, translations, feed_info
     }).map(pair => writeGTFSFile(...pair));
     
     console.log(agency.length, 'agency');
@@ -390,6 +429,7 @@ if (DEBUG) {
     console.log(stop_times.length, 'stop_times');
     console.log(shapes.length, 'shapes');
     console.log(translations.length, 'translations');
+    console.log(transfers.length, 'transfers');
 
     await importGtfs({
         agencies: [

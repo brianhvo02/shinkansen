@@ -9,7 +9,7 @@ import { LngLatBounds, Style } from 'mapbox-gl';
 import { isStop } from './utils';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
-import { Button, ButtonGroup, Dialog, DialogTitle, FormControl, InputLabel, MenuItem, Pagination, Select } from '@mui/material';
+import { Button, ButtonGroup, CircularProgress, Dialog, DialogTitle, FormControl, InputLabel, Link, MenuItem, Pagination, Select } from '@mui/material';
 
 const getStops = async (): Promise<GetStopsPayload> => {
     const res = await fetch('/api/stops');
@@ -54,27 +54,19 @@ const App = () => {
     const [service, setService] = useState('weekday');
     const [startStop, setStartStop] = useState('');
     const [endStop, setEndStop] = useState('');
-    const { data: trips } = useQuery(['trips', service, startStop, endStop], getTripsByStops);
+    const { data: trips, isLoading: tripsLoading } = useQuery(['trips', service, startStop, endStop], getTripsByStops);
     const [trip, setTrip] = useState('');
     const mapRef = useRef<MapRef>(null);
     const [mapStyle, setMapStyle] = useState<Style>();
     const [selectedStop, setSelectedStop] = useState<Stop | null>();
 
     const selectedTrip = useMemo(() => trips?.tripsWithTimesMap[trip], [trips, trip]);
-    const { departTime, arriveTime, elapsedTime } = useMemo(() => {
-        const departTime = selectedTrip?.departureTimes.split(',')[0];
-        const arriveTime = selectedTrip?.arrivalTimes.split(',')[1];
-        const departTs = selectedTrip?.departureTimestamps.split(',')[0];
-        const arriveTs = selectedTrip?.arrivalTimestamps.split(',')[1];
-        const elapsedTime = departTs && arriveTs && getElapsedTime(
-            parseInt(departTs), 
-            parseInt(arriveTs)
-        );
 
-        return { departTime, arriveTime, elapsedTime };
-    }, [selectedTrip])
-
-    const { data: tripInfo } = useQuery(['tripInfo', trip, ...(selectedTrip?.stopSequences.split(',') ?? [])], getTripInfo);
+    const { data: tripInfo, isLoading: tripInfoLoading } = useQuery([
+        'tripInfo', trip, 
+        selectedTrip?.firstStopSequence.toString() ?? '', 
+        selectedTrip?.lastStopSequence.toString() ?? ''
+    ], getTripInfo);
     
     const [showStopList, setShowStopList] = useState(false);
     const [stopList, setStopList] = useState<'start' | 'end'>('start');
@@ -247,32 +239,36 @@ const App = () => {
                             <ul className='trips'>
                             {
                                 tripsWithTimes.slice((tripListPage - 1) * 12, tripListPage * 12)
-                                    .map(trip => {
-                                        const departTime = trip.departureTimes.split(',')[0];
-                                        const arriveTime = trip.arrivalTimes.split(',')[1];
-                                        const elapsedTime = getElapsedTime(
-                                            parseInt(trip.departureTimestamps.split(',')[0]), 
-                                            parseInt(trip.arrivalTimestamps.split(',')[1])
-                                        );
-
+                                    .map(({ 
+                                        id, shortName, shortNameEn, 
+                                        departureTime, arrivalTime, 
+                                        departureTimestamp, arrivalTimestamp 
+                                    }) => {
                                         return (
                                             <li 
-                                                key={trip.id}
+                                                key={id}
                                                 onClick={() => {
-                                                    setTrip(trip.id);
+                                                    setTrip(id);
                                                     setShowTripList(false);
                                                 }}
                                             >
-                                                <h1>{trip.shortName}</h1>
-                                                <h1>{trip.shortNameEn}</h1>
+                                                <h1>{shortName}</h1>
+                                                <h1>{shortNameEn}</h1>
                                                 <h2>
                                                 {
-                                                    departTime.slice(0, departTime.lastIndexOf(':'))
+                                                    departureTime.slice(0, departureTime.lastIndexOf(':'))
                                                 } → {
-                                                    arriveTime.slice(0, arriveTime.lastIndexOf(':'))
+                                                    arrivalTime.slice(0, arrivalTime.lastIndexOf(':'))
                                                 }
                                                 </h2>
-                                                <p>{elapsedTime} hours</p>
+                                                <p>
+                                                {
+                                                getElapsedTime(
+                                                    departureTimestamp, 
+                                                    arrivalTimestamp
+                                                )
+                                                } hours
+                                                </p>
                                             </li>
                                         );
                                     })
@@ -286,34 +282,101 @@ const App = () => {
                         </div>
                     </Dialog>
                 }
+                <div className='trip-loading'>
                 {
-                    tripsWithTimes && (
-                        tripsWithTimes.length ? (
-                            <Button 
-                                variant='contained' 
-                                onClick={() => setShowTripList(true)}
-                            >Select train</Button>
-                        ) : <p>No trips found!</p>
+                    tripsLoading ? (
+                        <>
+                            <CircularProgress />
+                            <p>Searching for trains...</p>
+                        </>
+                    ) : (
+                        tripsWithTimes && (
+                            tripsWithTimes.length ? (
+                                <Button 
+                                    variant='contained' 
+                                    onClick={() => setShowTripList(true)}
+                                >Select train</Button>
+                            ) : <p>No trips found!</p>
+                        )
                     )
                 }
+                </div>
+                <div className='selected-trip'>
                 {
-                    selectedTrip &&
-                    <div className='selected-trip'>
-                        <h2>{selectedTrip.shortName}</h2>
-                        <h2>{selectedTrip.shortNameEn}</h2>
-                        <p>
-                        {
-                            departTime?.slice(0, departTime.lastIndexOf(':'))
-                        } → {
-                            arriveTime?.slice(0, arriveTime.lastIndexOf(':'))
-                        }
-                        </p>
-                        <p>{elapsedTime} hours</p>
-                        <h3>Last Stop</h3>
-                        <p>{selectedTrip.headsign}</p>
-                        <p>{selectedTrip.headsignEn}</p>
-                    </div>
+                    selectedTrip && (
+                        tripInfoLoading ? (<>
+                            <CircularProgress />
+                            <p>Gathering data for {selectedTrip.shortName} ({selectedTrip.shortNameEn})</p>
+                        </>) : (<>
+                            <div className='trip-info'>
+                                <h2>{selectedTrip.shortName}</h2>
+                                <h2>{selectedTrip.shortNameEn}</h2>
+                                <p>
+                                {
+                                    selectedTrip.departureTime.slice(0, selectedTrip.departureTime.lastIndexOf(':'))
+                                } → {
+                                    selectedTrip.arrivalTime.slice(0, selectedTrip.arrivalTime.lastIndexOf(':'))
+                                }
+                                </p>
+                                <p>
+                                {
+                                    getElapsedTime(
+                                        selectedTrip.departureTimestamp, 
+                                        selectedTrip.arrivalTimestamp
+                                    )
+                                } hours
+                                </p>
+                            </div>
+                            <div className='routes-info'>
+                                <div className='route-info'>
+                                    <h2>{selectedTrip.routeName}</h2>
+                                    <h2>{selectedTrip.routeNameEn}</h2>
+                                    <p>
+                                        <Link 
+                                            href={selectedTrip.agencyUrl}
+                                            rel='noreferrer'
+                                            target='_blank'
+                                        >{selectedTrip.agencyName}</Link>
+                                    </p>
+                                    <p>
+                                        <Link
+                                            href={selectedTrip.agencyUrlEn}
+                                            rel='noreferrer'
+                                            target='_blank'
+                                        >{selectedTrip.agencyNameEn}</Link>
+                                    </p>
+                                </div>
+                                {
+                                    selectedTrip.connectionAgencyId &&
+                                    <div className='route-info'>
+                                        <h2>{selectedTrip?.connectionRouteName}</h2>
+                                        <h2>{selectedTrip?.connectionRouteNameEn}</h2>
+                                        <p>
+                                            <Link 
+                                                href={selectedTrip?.connectionAgencyUrl}
+                                                rel='noreferrer'
+                                                target='_blank'
+                                            >{selectedTrip?.connectionAgencyName}</Link>
+                                        </p>
+                                        <p>
+                                            <Link
+                                                href={selectedTrip?.connectionAgencyUrlEn}
+                                                rel='noreferrer'
+                                                target='_blank'
+                                            >{selectedTrip?.connectionAgencyNameEn}</Link>
+                                        </p>
+                                    </div>
+                                }
+                            </div>
+                            <div className='headsign-info'>
+                                <h3>Last Stop</h3>
+                                <p>{selectedTrip.headsign}</p>
+                                <p>{selectedTrip.headsignEn}</p>
+                            </div>
+                        </>)
+                    )
                 }
+                </div>
                 <footer>
                     <p>Copyright &#169; 2023 Brian Vo</p>
                     <div className='links'>
@@ -368,13 +431,16 @@ const App = () => {
                     </Source>
                     {
                         tripInfo &&
-                        <Source type='geojson' data={tripInfo.geojsonLine}>
+                        <Source type='geojson' data={tripInfo.geojsonLines}>
                             <Layer 
                                 id='routes' 
                                 type='line' 
                                 paint={{
                                     'line-width': 4,
-                                    'line-color': '#4A89F3'
+                                    'line-color': {
+                                        type: 'identity',
+                                        property: 'routeColor'
+                                    }
                                 }}
                             />
                         </Source>

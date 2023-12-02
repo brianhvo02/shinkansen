@@ -1,4 +1,5 @@
 import { Feature, FeatureCollection, LineString, Point } from 'geojson';
+import { TransferType } from '../dictionary';
 
 export interface Stop {
     id: string;
@@ -15,21 +16,42 @@ export interface GetStopsPayload {
 
 export interface Trip {
     id: string;
-    routeId: string;
     service: string;
-    headsign: string;
     shortName: string;
+    headsign: string;
     direction: string;
+    shortNameEn: string;
+    headsignEn: string;
+
+    routeId: string;
+    routeName: string;
+    routeColor: string;
+    routeNameEn: string;
+    agencyId: string;
+    agencyName: string;
+    agencyUrl: string;
+    agencyNameEn: string;
+    agencyUrlEn: string;
+
+    connectionId?: string;
+    connectionRouteId?: string;
+    connectionRouteName?: string;
+    connectionRouteColor?: string;
+    connectionRouteNameEn?: string;
+    connectionAgencyId?: string;
+    connectionAgencyName?: string;
+    connectionAgencyUrl?: string;
+    connectionAgencyNameEn?: string;
+    connectionAgencyUrlEn?: string;
 }
 
 export interface TripWithTimes extends Trip {
-    arrivalTimes: string;
-    arrivalTimestamps: string;
-    departureTimes: string;
-    departureTimestamps: string;
-    stopSequences: string;
-    headsignEn: string;
-    shortNameEn: string;
+    departureTime: string;
+    departureTimestamp: number;
+    firstStopSequence: number;
+    arrivalTime: string;
+    arrivalTimestamp: number;
+    lastStopSequence: number;
 }
 
 export interface GetTripsByStopsPayload {
@@ -56,18 +78,16 @@ export interface Shape {
     seq: number;
 }
 
+export interface Transfers {
+    from_route_id: string;
+    to_route_id: string;
+    from_trip_id: string;
+    to_trip_id: string;
+    transfer_type: TransferType;
+}
+
 export interface GetTripInfoPayload {
     stopTimesMap: Record<string, StopTime>;
     geojsonStops: FeatureCollection<Point, StopTime>;
-    geojsonLine: Feature<LineString, Trip>;
-}
-
-interface TranslationsMap {
-    [table_name: string]: {
-        [field_name: string]: {
-            [record_id: string]: {
-                [language: string]: string;
-            }
-        }
-    }
+    geojsonLines: FeatureCollection<LineString, Trip | null>;
 }
